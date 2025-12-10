@@ -78,7 +78,6 @@ class SpanishGhostTextApp:
         self._current_user_text = text
         if self.overlay:
             self.overlay.set_user_text(text)
-        logger.info(f"Transcription: {text}")
 
     def _on_completion(self, user_text: str, completion: str):
         """Handle LLM completion result."""
@@ -87,7 +86,6 @@ class SpanishGhostTextApp:
             # Only update if this matches current user text
             if user_text == self._current_user_text:
                 self.overlay.set_ghost_text(completion)
-        logger.info(f"Completion: {completion}")
 
     def _on_device_change(self, device_index: int):
         """Handle audio device change from UI."""
@@ -101,6 +99,16 @@ class SpanishGhostTextApp:
     def _on_settings_change(self, new_settings: dict):
         """Handle settings change from UI."""
         logger.info("Settings changed")
+
+        # Update LLM settings (take effect immediately)
+        if "output_mode" in new_settings:
+            self.config.llm.output_mode = new_settings["output_mode"]
+            mode_names = ["English Continuation", "Spanish Translation", "Both Languages"]
+            logger.info(f"Output mode changed to: {mode_names[new_settings['output_mode']]}")
+        if "max_tokens" in new_settings:
+            self.config.llm.max_tokens = new_settings["max_tokens"]
+        if "temperature" in new_settings:
+            self.config.llm.temperature = new_settings["temperature"]
 
         # Update VAD threshold if changed
         if self.audio_handler and "vad_threshold" in new_settings:
@@ -397,6 +405,8 @@ def main():
         config.llm.max_tokens = saved_settings["max_tokens"]
     if saved_settings.get("temperature"):
         config.llm.temperature = saved_settings["temperature"]
+    if "output_mode" in saved_settings:
+        config.llm.output_mode = saved_settings["output_mode"]
     if saved_settings.get("whisper_model"):
         config.whisper.model_size = saved_settings["whisper_model"]
     if saved_settings.get("vad_threshold"):

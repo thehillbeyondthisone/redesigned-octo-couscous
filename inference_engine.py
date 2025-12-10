@@ -312,23 +312,31 @@ class Oracle:
 
     def _complete(self, user_text: str) -> str:
         """
-        Generate Spanish completion for user text.
+        Generate completion for user text based on output_mode.
 
         Args:
             user_text: Partial English text from transcription
 
         Returns:
-            Spanish completion
+            Completion based on mode (English/Spanish/Both)
         """
         if self.model is None:
-            # Fallback: return placeholder
             return "[LLM not loaded]"
 
         try:
             start_time = time.time()
 
-            # Build prompt using shadow prompt template
-            prompt = self.config.prompt_template.format(user_input=user_text)
+            # Select prompt based on output mode
+            mode = self.config.output_mode
+            if mode == 0:  # English continuation
+                prompt = self.config.prompt_english.format(user_input=user_text)
+                stop_tokens = ["\n", "Sentence:", "Continuation:"]
+            elif mode == 2:  # Both languages
+                prompt = self.config.prompt_both.format(user_input=user_text)
+                stop_tokens = ["\n", "English:", "Response:"]
+            else:  # Default: Spanish translation (mode 1)
+                prompt = self.config.prompt_spanish.format(user_input=user_text)
+                stop_tokens = ["\n", "English:", "Spanish:"]
 
             # Generate completion (raw completion, not chat)
             output = self.model(
@@ -336,7 +344,7 @@ class Oracle:
                 max_tokens=self.config.max_tokens,
                 temperature=self.config.temperature,
                 top_p=self.config.top_p,
-                stop=["\n", "Input:", "Output:"],  # Stop at newline or next example
+                stop=stop_tokens,
                 echo=False
             )
 

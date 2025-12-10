@@ -43,9 +43,21 @@ class LLMConfig:
     max_tokens: int = 50  # Allow complete phrases
     temperature: float = 0.7
     top_p: float = 0.9
+    output_mode: int = 1  # 0=English, 1=Spanish, 2=Both
 
-    # Prompt template for Spanish translation/completion
-    prompt_template: str = '''Translate the following English text to Spanish. Output ONLY the Spanish translation, nothing else.
+    # Prompt templates for each mode
+    prompt_english: str = '''Continue the following sentence naturally. Output ONLY the continuation, nothing else.
+
+Sentence: I was thinking about going to the
+Continuation: store to buy some groceries for dinner tonight.
+
+Sentence: The best thing about working from home is
+Continuation: having the flexibility to manage my own schedule.
+
+Sentence: {user_input}
+Continuation:'''
+
+    prompt_spanish: str = '''Translate the following English text to Spanish. Output ONLY the Spanish translation, nothing else.
 
 English: I want to go to the beach today.
 Spanish: Quiero ir a la playa hoy.
@@ -53,11 +65,19 @@ Spanish: Quiero ir a la playa hoy.
 English: Where is the nearest bathroom?
 Spanish: ¿Dónde está el baño más cercano?
 
-English: Can you help me find a restaurant?
-Spanish: ¿Puedes ayudarme a encontrar un restaurante?
-
 English: {user_input}
 Spanish:'''
+
+    prompt_both: str = '''Translate the following English text to Spanish, then continue the thought. Format: Spanish translation | Continuation
+
+English: I want to go to the beach
+Response: Quiero ir a la playa | maybe we can go swimming too.
+
+English: The weather is nice today
+Response: El clima está agradable hoy | perfect for a walk in the park.
+
+English: {user_input}
+Response:'''
 
 
 @dataclass

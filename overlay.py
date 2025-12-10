@@ -47,6 +47,7 @@ def load_settings() -> Dict[str, Any]:
         "whisper_model": "large-v3-turbo",
         "max_tokens": 50,
         "temperature": 0.7,
+        "output_mode": 1,  # 0=English, 1=Spanish, 2=Both
         "vad_threshold": 0.5,
         "silence_duration_ms": 300,
         "low_vram_mode": False,
@@ -238,6 +239,22 @@ class SettingsDialog(QDialog):
         whisper_layout.addRow("", self.force_cpu_check)
 
         layout.addWidget(whisper_group)
+
+        # Output Mode
+        output_group = QGroupBox("Output Mode")
+        output_layout = QFormLayout(output_group)
+
+        self.output_mode_combo = QComboBox()
+        self.output_mode_combo.addItems([
+            "English Continuation (predict next words)",
+            "Spanish Translation",
+            "Both (English + Spanish)"
+        ])
+        current_mode = self.settings.get("output_mode", 1)  # Default to Spanish
+        self.output_mode_combo.setCurrentIndex(current_mode)
+        output_layout.addRow("Mode:", self.output_mode_combo)
+
+        layout.addWidget(output_group)
         layout.addStretch()
         return widget
 
@@ -307,6 +324,7 @@ class SettingsDialog(QDialog):
         self.settings["llm_model_path"] = self.llm_path_edit.text()
         self.settings["max_tokens"] = self.max_tokens_spin.value()
         self.settings["temperature"] = self.temperature_spin.value()
+        self.settings["output_mode"] = self.output_mode_combo.currentIndex()
         self.settings["whisper_model"] = self.whisper_combo.currentText()
         self.settings["vad_threshold"] = self.vad_threshold_slider.value() / 100.0
         self.settings["silence_duration_ms"] = self.silence_spin.value()

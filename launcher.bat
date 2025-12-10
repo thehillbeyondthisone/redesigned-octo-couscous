@@ -622,8 +622,16 @@ exit /b 0
 
 :check_cuda
 echo.
-echo %CYAN%Checking CUDA availability...%RESET%
-python -c "import torch; print(f'CUDA available: {torch.cuda.is_available()}'); print(f'CUDA version: {torch.version.cuda}' if torch.cuda.is_available() else 'N/A'); print(f'GPU: {torch.cuda.get_device_name(0)}' if torch.cuda.is_available() else 'N/A')"
+echo %CYAN%Checking GPU/CUDA availability...%RESET%
+echo.
+echo %YELLOW%PyTorch CUDA:%RESET%
+python -c "import torch; print(f'  Available: {torch.cuda.is_available()}'); print(f'  Version: {torch.version.cuda}' if torch.cuda.is_available() else '  Version: N/A'); print(f'  GPU: {torch.cuda.get_device_name(0)}' if torch.cuda.is_available() else '  GPU: N/A')" 2>nul || echo   PyTorch not installed
+echo.
+echo %YELLOW%CTranslate2 (faster-whisper):%RESET%
+python -c "import ctranslate2; devices = ctranslate2.get_supported_compute_types('cuda'); print(f'  CUDA support: {len(devices) > 0}'); print(f'  Compute types: {devices}' if devices else '')" 2>nul || echo   ctranslate2 not installed
+echo.
+echo %YELLOW%llama-cpp-python:%RESET%
+python -c "from llama_cpp import Llama; print('  Installed: Yes (GPU support depends on build)')" 2>nul || echo   llama-cpp-python not installed
 exit /b 0
 
 :show_settings
