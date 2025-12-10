@@ -1,0 +1,10 @@
+{
+  "llm_model_path": "",
+  "whisper_model": "base",
+  "vad_threshold": 0.5,
+  "silence_duration_ms": 300,
+  "low_vram_mode": false,
+  "force_cpu": false,
+  "always_on_top": true,
+  "auto_start": false
+}

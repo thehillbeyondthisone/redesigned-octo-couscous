@@ -14,12 +14,28 @@ import threading
 import queue
 import time
 import logging
+import os
+import sys
 from typing import Optional, Callable, Tuple
+from pathlib import Path
 import numpy as np
 
 from config import WhisperConfig, LLMConfig
 
 logger = logging.getLogger(__name__)
+
+# Configure DLL search path for cuDNN on Windows
+# This allows cuDNN DLLs placed next to main.py to be found
+if sys.platform == "win32":
+    script_dir = Path(__file__).parent.absolute()
+    cudnn_dlls = list(script_dir.glob("cudnn*.dll"))
+    if cudnn_dlls:
+        # Add script directory to DLL search path
+        os.add_dll_directory(str(script_dir))
+        print(f"[DLL] Added {script_dir} to DLL search path ({len(cudnn_dlls)} cuDNN DLLs found)")
+    # Also check for zlibwapi.dll
+    if (script_dir / "zlibwapi.dll").exists():
+        print(f"[DLL] Found zlibwapi.dll")
 
 # Lazy imports for optional dependencies
 faster_whisper = None
@@ -75,23 +91,58 @@ class Transcriber:
         self._init_model()
 
     def _init_model(self):
-        """Initialize faster-whisper model."""
+        """Initialize faster-whisper model with automatic CUDA fallback."""
+        import time as _time
+        import os
         fw = _import_faster_whisper()
         if fw is None:
+            print("[Whisper] ERROR: faster-whisper not installed")
             logger.error("Cannot initialize Whisper model")
             return
 
-        try:
-            logger.info(f"Loading Whisper model: {self.config.model_size}")
-            self.model = fw.WhisperModel(
-                self.config.model_size,
-                device=self.config.device,
-                compute_type=self.config.compute_type
-            )
-            logger.info("Whisper model loaded successfully")
-        except Exception as e:
-            logger.error(f"Failed to load Whisper model: {e}")
-            self.model = None
+        # Try configurations in order of preference
+        configs_to_try = [
+            (self.config.device, self.config.compute_type),
+            ("cuda", "int8"),  # Try int8 if float16 fails
+            ("cpu", "int8"),   # Fallback to CPU
+        ]
+        
+        model_name = self.config.model_size
+        print(f"[Whisper] Loading {model_name}...", end=" ", flush=True)
+        
+        for device, compute_type in configs_to_try:
+            try:
+                start = _time.time()
+                self.model = fw.WhisperModel(
+                    model_name,
+                    device=device,
+                    compute_type=compute_type
+                )
+                elapsed = _time.time() - start
+                print(f"OK ({device}/{compute_type}, {elapsed:.1f}s)")
+                logger.info(f"Whisper model loaded: {model_name} on {device}/{compute_type}")
+                
+                # Update config to reflect what actually worked
+                self.config.device = device
+                self.config.compute_type = compute_type
+                return
+                
+            except Exception as e:
+                error_msg = str(e).lower()
+                if "cudnn" in error_msg or "cuda" in error_msg:
+                    if device == "cuda":
+                        print(f"\n[Whisper] CUDA failed ({e}), trying fallback...", end=" ", flush=True)
+                        continue
+                # If we're already on CPU or it's a different error, give up
+                if device == "cpu":
+                    print(f"FAILED: {e}")
+                    logger.error(f"Failed to load Whisper model: {e}")
+                    self.model = None
+                    return
+                continue
+        
+        print("FAILED: All configurations failed")
+        self.model = None
 
     def _transcribe(self, audio: np.ndarray) -> str:
         """
@@ -118,13 +169,26 @@ class Transcriber:
             )
 
             # Combine all segments
-            text = " ".join(segment.text.strip() for segment in segments)
+            text_parts = []
+            for segment in segments:
+                text_parts.append(segment.text.strip())
+            text = " ".join(text_parts)
 
             elapsed = (time.time() - start_time) * 1000
             logger.info(f"Transcription ({elapsed:.0f}ms): {text}")
 
             return text.strip()
         except Exception as e:
+            error_msg = str(e).lower()
+            # Check for CUDA/cuDNN errors at runtime
+            if "cudnn" in error_msg or "cuda" in error_msg or "invalid handle" in error_msg:
+                print(f"[Whisper] CUDA error, switching to CPU...", flush=True)
+                logger.warning(f"CUDA error during transcription: {e}, falling back to CPU")
+                self.config.device = "cpu"
+                self.config.compute_type = "int8"
+                self._init_model()
+                if self.model is not None:
+                    return self._transcribe(audio)
             logger.error(f"Transcription error: {e}")
             return ""
 
@@ -203,17 +267,32 @@ class Oracle:
 
     def _init_model(self):
         """Initialize llama-cpp-python model."""
+        import time as _time
+        import os
         Llama = _import_llama_cpp()
         if Llama is None:
+            print("[LLM] ERROR: llama-cpp-python not installed")
             logger.error("Cannot initialize LLM model")
             return
 
         if not self.config.model_path:
+            print("[LLM] No model path specified - completion disabled")
             logger.warning("No LLM model path specified")
             return
 
+        # Extract model info from filename
+        model_file = os.path.basename(self.config.model_path)
+        # Try to extract quant from filename (e.g., Q4_K_M)
+        quant = "unknown"
+        for q in ["Q2_K", "Q3_K_S", "Q3_K_M", "Q3_K_L", "Q4_0", "Q4_K_S", "Q4_K_M", "Q5_0", "Q5_K_S", "Q5_K_M", "Q6_K", "Q8_0"]:
+            if q in model_file.upper():
+                quant = q
+                break
+        
+        print(f"[LLM] Loading {model_file} ({quant})...", end=" ", flush=True)
+        
         try:
-            logger.info(f"Loading LLM model: {self.config.model_path}")
+            start = _time.time()
             self.model = Llama(
                 model_path=self.config.model_path,
                 n_ctx=self.config.n_ctx,
@@ -221,8 +300,13 @@ class Oracle:
                 n_batch=self.config.n_batch,
                 verbose=False
             )
-            logger.info("LLM model loaded successfully")
+            elapsed = _time.time() - start
+            
+            gpu_info = f"GPU:{self.config.n_gpu_layers}" if self.config.n_gpu_layers != 0 else "CPU"
+            print(f"OK ({gpu_info}, {elapsed:.1f}s)")
+            logger.info(f"LLM model loaded: {model_file}")
         except Exception as e:
+            print(f"FAILED: {e}")
             logger.error(f"Failed to load LLM model: {e}")
             self.model = None
 

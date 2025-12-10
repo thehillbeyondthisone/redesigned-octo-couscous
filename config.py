@@ -40,22 +40,24 @@ class LLMConfig:
     n_ctx: int = 512  # Context window (small for single sentences)
     n_gpu_layers: int = -1  # Offload all layers to GPU
     n_batch: int = 512  # Batch size for prompt processing
-    max_tokens: int = 10  # Only predict immediate next words
+    max_tokens: int = 50  # Allow complete phrases
     temperature: float = 0.7
     top_p: float = 0.9
 
-    # Prompt template for Spanish autocomplete
-    prompt_template: str = '''You are a real-time Spanish tutor. Your job is to complete the user's sentence in Spanish.
-Examples:
-Input: "I want to go to the..."
-Output: "playa hoy."
+    # Prompt template for Spanish translation/completion
+    prompt_template: str = '''Translate the following English text to Spanish. Output ONLY the Spanish translation, nothing else.
 
-Input: "Where is the..."
-Output: "baño más cercano?"
+English: I want to go to the beach today.
+Spanish: Quiero ir a la playa hoy.
 
-Input: "{user_input}"
-Output:
-'''
+English: Where is the nearest bathroom?
+Spanish: ¿Dónde está el baño más cercano?
+
+English: Can you help me find a restaurant?
+Spanish: ¿Puedes ayudarme a encontrar un restaurante?
+
+English: {user_input}
+Spanish:'''
 
 
 @dataclass

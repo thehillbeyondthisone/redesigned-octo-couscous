@@ -365,6 +365,11 @@ def parse_args():
         default=None,
         help="Audio input device index"
     )
+    parser.add_argument(
+        "--cpu",
+        action="store_true",
+        help="Force CPU mode for Whisper (disable CUDA)"
+    )
     return parser.parse_args()
 
 
@@ -388,12 +393,22 @@ def main():
     # Apply saved settings
     if saved_settings.get("llm_model_path"):
         config.llm.model_path = saved_settings["llm_model_path"]
+    if saved_settings.get("max_tokens"):
+        config.llm.max_tokens = saved_settings["max_tokens"]
+    if saved_settings.get("temperature"):
+        config.llm.temperature = saved_settings["temperature"]
     if saved_settings.get("whisper_model"):
         config.whisper.model_size = saved_settings["whisper_model"]
     if saved_settings.get("vad_threshold"):
         config.vad.threshold = saved_settings["vad_threshold"]
     if saved_settings.get("silence_duration_ms"):
         config.vad.min_silence_duration_ms = saved_settings["silence_duration_ms"]
+
+    # Apply CPU mode from settings or command line
+    if args.cpu or saved_settings.get("force_cpu", False):
+        config.whisper.device = "cpu"
+        config.whisper.compute_type = "int8"
+        print("[Config] CPU mode enabled for Whisper")
 
     # Command line overrides saved settings
     if args.model:

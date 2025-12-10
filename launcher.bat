@@ -209,7 +209,8 @@ echo  %WHITE%1.%RESET% Set LLM model path
 echo  %WHITE%2.%RESET% Set Whisper model size
 echo  %WHITE%3.%RESET% Toggle low VRAM mode
 echo  %WHITE%4.%RESET% Toggle debug mode
-echo  %WHITE%5.%RESET% View current settings
+echo  %WHITE%5.%RESET% Toggle CPU mode (Whisper)
+echo  %WHITE%6.%RESET% View current settings
 echo  %WHITE%0.%RESET% Back to main menu
 echo.
 
@@ -217,8 +218,9 @@ echo.
 echo  %YELLOW%Current settings:%RESET%
 if defined SAVED_MODEL echo    Model: %SAVED_MODEL%
 if defined SAVED_WHISPER echo    Whisper: %SAVED_WHISPER%
-if defined LOW_VRAM_MODE echo    Low VRAM: %LOW_VRAM_MODE%
-if defined DEBUG_MODE echo    Debug: %DEBUG_MODE%
+if defined LOW_VRAM_MODE echo    Low VRAM: ENABLED
+if defined CPU_MODE echo    CPU Mode: ENABLED
+if defined DEBUG_MODE echo    Debug: ENABLED
 echo.
 
 set /p config_choice="Select option: "
@@ -258,6 +260,16 @@ if "%config_choice%"=="4" (
     pause
 )
 if "%config_choice%"=="5" (
+    if defined CPU_MODE (
+        set CPU_MODE=
+        echo %GREEN%CPU mode disabled. Whisper will use CUDA.%RESET%
+    ) else (
+        set CPU_MODE=1
+        echo %GREEN%CPU mode enabled. Whisper will use CPU.%RESET%
+    )
+    pause
+)
+if "%config_choice%"=="6" (
     call :show_settings
     pause
 )
@@ -355,6 +367,7 @@ if defined SAVED_WHISPER set CMD=%CMD% --whisper-model %SAVED_WHISPER%
 
 :: Add flags
 if defined LOW_VRAM_MODE set CMD=%CMD% --low-vram
+if defined CPU_MODE set CMD=%CMD% --cpu
 if defined DEBUG_MODE set CMD=%CMD% --debug
 set CMD=%CMD%%EXTRA_ARGS%
 
@@ -400,42 +413,79 @@ exit /b 0
 
 :install_all_deps
 echo.
-echo %CYAN%Installing all dependencies...%RESET%
+echo %CYAN%============================================%RESET%
+echo %CYAN%  Installing All Dependencies              %RESET%
+echo %CYAN%============================================%RESET%
 echo.
+echo %YELLOW%Upgrading pip...%RESET%
 python -m pip install --upgrade pip
+echo.
 
-echo %YELLOW%[1/5] Installing PyTorch (CUDA 12.1)...%RESET%
+echo %CYAN%[1/6] Installing PyTorch (CUDA 12.1)...%RESET%
+echo       This may take several minutes on first install.
 pip install torch --index-url https://download.pytorch.org/whl/cu121
 if errorlevel 1 (
-    echo %YELLOW%CUDA install failed, trying CPU...%RESET%
+    echo %YELLOW%       CUDA install failed, trying CPU version...%RESET%
     pip install torch
 )
+echo %GREEN%       PyTorch installed.%RESET%
+echo.
 
-echo %YELLOW%[2/5] Installing faster-whisper...%RESET%
-pip install faster-whisper==1.0.3
+echo %CYAN%[2/6] Installing faster-whisper and dependencies...%RESET%
+echo       Installing requests (HTTP library)...
+pip install requests
+echo       Installing faster-whisper (speech recognition)...
+pip install faster-whisper
+echo %GREEN%       faster-whisper installed.%RESET%
+echo.
 
-echo %YELLOW%[3/5] Installing llama-cpp-python (CUDA)...%RESET%
+echo %CYAN%[3/6] Installing llama-cpp-python (CUDA)...%RESET%
+echo       This requires Visual Studio Build Tools if building from source.
 set CMAKE_ARGS=-DGGML_CUDA=on
 pip install llama-cpp-python
 if errorlevel 1 (
-    echo %YELLOW%CUDA build failed, trying CPU...%RESET%
+    echo %YELLOW%       CUDA build failed, trying CPU version...%RESET%
     set CMAKE_ARGS=
     pip install llama-cpp-python
 )
+echo %GREEN%       llama-cpp-python installed.%RESET%
+echo.
 
-echo %YELLOW%[4/5] Installing audio dependencies...%RESET%
+echo %CYAN%[4/6] Installing audio dependencies...%RESET%
 pip install pyaudio sounddevice
 if errorlevel 1 (
-    echo %YELLOW%Trying alternative pyaudio install...%RESET%
+    echo %YELLOW%       Trying alternative pyaudio install via pipwin...%RESET%
     pip install pipwin
     pipwin install pyaudio
 )
-
-echo %YELLOW%[5/5] Installing UI and utilities...%RESET%
-pip install numpy PyQt6 silero-vad
-
+echo %GREEN%       Audio dependencies installed.%RESET%
 echo.
-echo %GREEN%All dependencies installed!%RESET%
+
+echo %CYAN%[5/6] Installing UI and utilities...%RESET%
+pip install numpy PyQt6 silero-vad
+echo %GREEN%       UI and utilities installed.%RESET%
+echo.
+
+echo %CYAN%[6/6] Verifying installation...%RESET%
+echo       Checking faster-whisper import...
+python -c "import faster_whisper; print('       faster-whisper version:', faster_whisper.__version__)"
+if errorlevel 1 (
+    echo %RED%       ERROR: faster-whisper import failed!%RESET%
+    echo       Attempting to reinstall dependencies...
+    pip install requests huggingface_hub tokenizers ctranslate2 onnxruntime av
+    pip install --force-reinstall faster-whisper
+)
+echo       Checking torch import...
+python -c "import torch; print('       PyTorch version:', torch.__version__, '| CUDA:', torch.cuda.is_available())"
+echo       Checking llama-cpp-python import...
+python -c "from llama_cpp import Llama; print('       llama-cpp-python: OK')"
+echo       Checking PyQt6 import...
+python -c "from PyQt6.QtWidgets import QApplication; print('       PyQt6: OK')"
+echo.
+
+echo %GREEN%============================================%RESET%
+echo %GREEN%  All dependencies installed successfully! %RESET%
+echo %GREEN%============================================%RESET%
 exit /b 0
 
 :install_core
@@ -454,8 +504,19 @@ pip install torch
 exit /b 0
 
 :install_whisper
-echo %YELLOW%Installing faster-whisper...%RESET%
-pip install faster-whisper==1.0.3
+echo %YELLOW%Installing faster-whisper and dependencies...%RESET%
+echo       Installing requests (HTTP library)...
+pip install requests
+echo       Installing faster-whisper...
+pip install faster-whisper
+echo       Verifying installation...
+python -c "import faster_whisper; print('       faster-whisper version:', faster_whisper.__version__)"
+if errorlevel 1 (
+    echo %RED%       Import failed, installing additional dependencies...%RESET%
+    pip install requests huggingface_hub tokenizers ctranslate2 onnxruntime av
+    pip install --force-reinstall faster-whisper
+)
+echo %GREEN%faster-whisper installed successfully.%RESET%
 exit /b 0
 
 :install_llama_cuda
@@ -571,6 +632,7 @@ echo %CYAN%Current Settings:%RESET%
 echo   Model path: %SAVED_MODEL%
 echo   Whisper model: %SAVED_WHISPER%
 echo   Low VRAM mode: %LOW_VRAM_MODE%
+echo   CPU mode: %CPU_MODE%
 echo   Debug mode: %DEBUG_MODE%
 echo   Models directory: %MODELS_DIR%
 echo   Virtual environment: %VENV_DIR%

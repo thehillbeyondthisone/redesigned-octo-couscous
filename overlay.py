@@ -45,9 +45,12 @@ def load_settings() -> Dict[str, Any]:
     defaults = {
         "llm_model_path": "",
         "whisper_model": "large-v3-turbo",
+        "max_tokens": 50,
+        "temperature": 0.7,
         "vad_threshold": 0.5,
         "silence_duration_ms": 300,
         "low_vram_mode": False,
+        "force_cpu": False,
         "always_on_top": True,
         "auto_start": False,
     }
@@ -194,6 +197,21 @@ class SettingsDialog(QDialog):
         path_layout.addWidget(browse_btn)
         llm_layout.addRow("Model Path:", path_layout)
 
+        # Max tokens setting
+        self.max_tokens_spin = QSpinBox()
+        self.max_tokens_spin.setRange(10, 200)
+        self.max_tokens_spin.setValue(self.settings.get("max_tokens", 50))
+        self.max_tokens_spin.setToolTip("Maximum tokens to generate (higher = longer responses)")
+        llm_layout.addRow("Max Tokens:", self.max_tokens_spin)
+
+        # Temperature setting
+        self.temperature_spin = QDoubleSpinBox()
+        self.temperature_spin.setRange(0.1, 2.0)
+        self.temperature_spin.setSingleStep(0.1)
+        self.temperature_spin.setValue(self.settings.get("temperature", 0.7))
+        self.temperature_spin.setToolTip("Creativity (lower = more focused, higher = more creative)")
+        llm_layout.addRow("Temperature:", self.temperature_spin)
+
         layout.addWidget(llm_group)
 
         # Whisper Model
@@ -214,6 +232,10 @@ class SettingsDialog(QDialog):
         self.low_vram_check = QCheckBox("Low VRAM Mode (uses smaller models)")
         self.low_vram_check.setChecked(self.settings.get("low_vram_mode", False))
         whisper_layout.addRow("", self.low_vram_check)
+
+        self.force_cpu_check = QCheckBox("Force CPU Mode (disable CUDA for Whisper)")
+        self.force_cpu_check.setChecked(self.settings.get("force_cpu", False))
+        whisper_layout.addRow("", self.force_cpu_check)
 
         layout.addWidget(whisper_group)
         layout.addStretch()
@@ -283,10 +305,13 @@ class SettingsDialog(QDialog):
 
     def _save_and_close(self):
         self.settings["llm_model_path"] = self.llm_path_edit.text()
+        self.settings["max_tokens"] = self.max_tokens_spin.value()
+        self.settings["temperature"] = self.temperature_spin.value()
         self.settings["whisper_model"] = self.whisper_combo.currentText()
         self.settings["vad_threshold"] = self.vad_threshold_slider.value() / 100.0
         self.settings["silence_duration_ms"] = self.silence_spin.value()
         self.settings["low_vram_mode"] = self.low_vram_check.isChecked()
+        self.settings["force_cpu"] = self.force_cpu_check.isChecked()
         self.settings["always_on_top"] = self.always_on_top_check.isChecked()
         self.settings["auto_start"] = self.auto_start_check.isChecked()
         save_settings(self.settings)
