@@ -6,23 +6,31 @@ Enhanced UI with:
 - Start/Stop controls
 - Debug output panel
 - Ghost text display
+- Settings dialog
 """
 
 import sys
+import json
 import logging
-from typing import Optional, Callable, List
+from pathlib import Path
+from typing import Optional, Callable, List, Dict, Any
 from datetime import datetime
 
 from config import UIConfig
 
 logger = logging.getLogger(__name__)
 
+# Settings file path
+SETTINGS_FILE = Path("settings.json")
+
 # Try to import PyQt6
 try:
     from PyQt6.QtWidgets import (
         QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
         QFrame, QPushButton, QComboBox, QTextEdit, QSplitter,
-        QGroupBox, QSizePolicy
+        QGroupBox, QSizePolicy, QDialog, QLineEdit, QSlider,
+        QSpinBox, QDoubleSpinBox, QFileDialog, QTabWidget,
+        QFormLayout, QCheckBox, QMessageBox
     )
     from PyQt6.QtCore import Qt, pyqtSignal, QObject, QTimer
     from PyQt6.QtGui import QFont, QColor, QTextCursor
@@ -30,6 +38,262 @@ try:
 except ImportError:
     PYQT_AVAILABLE = False
     logger.warning("PyQt6 not available, overlay disabled")
+
+
+def load_settings() -> Dict[str, Any]:
+    """Load settings from JSON file."""
+    defaults = {
+        "llm_model_path": "",
+        "whisper_model": "large-v3-turbo",
+        "vad_threshold": 0.5,
+        "silence_duration_ms": 300,
+        "low_vram_mode": False,
+        "always_on_top": True,
+        "auto_start": False,
+    }
+    try:
+        if SETTINGS_FILE.exists():
+            with open(SETTINGS_FILE, "r") as f:
+                saved = json.load(f)
+                defaults.update(saved)
+    except Exception as e:
+        logger.error(f"Failed to load settings: {e}")
+    return defaults
+
+
+def save_settings(settings: Dict[str, Any]):
+    """Save settings to JSON file."""
+    try:
+        with open(SETTINGS_FILE, "w") as f:
+            json.dump(settings, f, indent=2)
+        logger.info("Settings saved")
+    except Exception as e:
+        logger.error(f"Failed to save settings: {e}")
+
+
+class SettingsDialog(QDialog):
+    """Settings dialog for configuring the application."""
+
+    def __init__(self, parent=None, current_settings: Dict[str, Any] = None):
+        super().__init__(parent)
+        self.settings = current_settings or load_settings()
+        self._init_ui()
+
+    def _init_ui(self):
+        self.setWindowTitle("Settings")
+        self.setMinimumSize(500, 400)
+        self.setStyleSheet("""
+            QDialog {
+                background-color: #1a1a2e;
+                color: #ffffff;
+            }
+            QTabWidget::pane {
+                border: 1px solid #3a3a5e;
+                border-radius: 6px;
+            }
+            QTabBar::tab {
+                background-color: #2a2a4e;
+                color: #ffffff;
+                padding: 8px 16px;
+                margin-right: 2px;
+                border-top-left-radius: 6px;
+                border-top-right-radius: 6px;
+            }
+            QTabBar::tab:selected {
+                background-color: #3a3a5e;
+            }
+            QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox {
+                background-color: #2a2a4e;
+                border: 1px solid #3a3a5e;
+                border-radius: 4px;
+                padding: 6px;
+                color: #ffffff;
+            }
+            QPushButton {
+                background-color: #3a3a5e;
+                border: none;
+                border-radius: 6px;
+                padding: 8px 16px;
+                color: #ffffff;
+            }
+            QPushButton:hover {
+                background-color: #4a4a7e;
+            }
+            QLabel {
+                color: #cccccc;
+            }
+            QCheckBox {
+                color: #ffffff;
+            }
+            QCheckBox::indicator {
+                width: 18px;
+                height: 18px;
+            }
+            QSlider::groove:horizontal {
+                height: 6px;
+                background: #2a2a4e;
+                border-radius: 3px;
+            }
+            QSlider::handle:horizontal {
+                background: #4a9eff;
+                width: 16px;
+                margin: -5px 0;
+                border-radius: 8px;
+            }
+            QGroupBox {
+                border: 1px solid #3a3a5e;
+                border-radius: 6px;
+                margin-top: 12px;
+                padding-top: 10px;
+                color: #888888;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 10px;
+                padding: 0 5px;
+            }
+        """)
+
+        layout = QVBoxLayout(self)
+
+        # Tab widget
+        tabs = QTabWidget()
+        tabs.addTab(self._create_models_tab(), "Models")
+        tabs.addTab(self._create_audio_tab(), "Audio & VAD")
+        tabs.addTab(self._create_ui_tab(), "Interface")
+        layout.addWidget(tabs)
+
+        # Buttons
+        btn_layout = QHBoxLayout()
+        btn_layout.addStretch()
+
+        save_btn = QPushButton("Save")
+        save_btn.clicked.connect(self._save_and_close)
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.clicked.connect(self.reject)
+
+        btn_layout.addWidget(cancel_btn)
+        btn_layout.addWidget(save_btn)
+        layout.addLayout(btn_layout)
+
+    def _create_models_tab(self) -> QWidget:
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+
+        # LLM Model
+        llm_group = QGroupBox("LLM Model (Spanish Completion)")
+        llm_layout = QFormLayout(llm_group)
+
+        self.llm_path_edit = QLineEdit(self.settings.get("llm_model_path", ""))
+        self.llm_path_edit.setPlaceholderText("Path to .gguf model file")
+        browse_btn = QPushButton("Browse...")
+        browse_btn.clicked.connect(self._browse_llm_model)
+
+        path_layout = QHBoxLayout()
+        path_layout.addWidget(self.llm_path_edit)
+        path_layout.addWidget(browse_btn)
+        llm_layout.addRow("Model Path:", path_layout)
+
+        layout.addWidget(llm_group)
+
+        # Whisper Model
+        whisper_group = QGroupBox("Whisper Model (Speech Recognition)")
+        whisper_layout = QFormLayout(whisper_group)
+
+        self.whisper_combo = QComboBox()
+        self.whisper_combo.addItems([
+            "tiny", "base", "small", "medium",
+            "large-v2", "large-v3", "large-v3-turbo"
+        ])
+        current_whisper = self.settings.get("whisper_model", "large-v3-turbo")
+        idx = self.whisper_combo.findText(current_whisper)
+        if idx >= 0:
+            self.whisper_combo.setCurrentIndex(idx)
+        whisper_layout.addRow("Model Size:", self.whisper_combo)
+
+        self.low_vram_check = QCheckBox("Low VRAM Mode (uses smaller models)")
+        self.low_vram_check.setChecked(self.settings.get("low_vram_mode", False))
+        whisper_layout.addRow("", self.low_vram_check)
+
+        layout.addWidget(whisper_group)
+        layout.addStretch()
+        return widget
+
+    def _create_audio_tab(self) -> QWidget:
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+
+        # VAD Settings
+        vad_group = QGroupBox("Voice Activity Detection")
+        vad_layout = QFormLayout(vad_group)
+
+        # VAD Threshold
+        self.vad_threshold_slider = QSlider(Qt.Orientation.Horizontal)
+        self.vad_threshold_slider.setRange(10, 90)
+        self.vad_threshold_slider.setValue(int(self.settings.get("vad_threshold", 0.5) * 100))
+        self.vad_threshold_label = QLabel(f"{self.vad_threshold_slider.value()}%")
+        self.vad_threshold_slider.valueChanged.connect(
+            lambda v: self.vad_threshold_label.setText(f"{v}%")
+        )
+
+        threshold_layout = QHBoxLayout()
+        threshold_layout.addWidget(self.vad_threshold_slider)
+        threshold_layout.addWidget(self.vad_threshold_label)
+        vad_layout.addRow("Speech Threshold:", threshold_layout)
+
+        # Silence Duration
+        self.silence_spin = QSpinBox()
+        self.silence_spin.setRange(100, 2000)
+        self.silence_spin.setSuffix(" ms")
+        self.silence_spin.setValue(self.settings.get("silence_duration_ms", 300))
+        vad_layout.addRow("Silence Duration:", self.silence_spin)
+
+        layout.addWidget(vad_group)
+        layout.addStretch()
+        return widget
+
+    def _create_ui_tab(self) -> QWidget:
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+
+        # UI Settings
+        ui_group = QGroupBox("Window Settings")
+        ui_layout = QFormLayout(ui_group)
+
+        self.always_on_top_check = QCheckBox("Always on top")
+        self.always_on_top_check.setChecked(self.settings.get("always_on_top", True))
+        ui_layout.addRow("", self.always_on_top_check)
+
+        self.auto_start_check = QCheckBox("Auto-start on launch")
+        self.auto_start_check.setChecked(self.settings.get("auto_start", False))
+        ui_layout.addRow("", self.auto_start_check)
+
+        layout.addWidget(ui_group)
+        layout.addStretch()
+        return widget
+
+    def _browse_llm_model(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Select LLM Model",
+            str(Path.home()),
+            "GGUF Models (*.gguf);;All Files (*)"
+        )
+        if path:
+            self.llm_path_edit.setText(path)
+
+    def _save_and_close(self):
+        self.settings["llm_model_path"] = self.llm_path_edit.text()
+        self.settings["whisper_model"] = self.whisper_combo.currentText()
+        self.settings["vad_threshold"] = self.vad_threshold_slider.value() / 100.0
+        self.settings["silence_duration_ms"] = self.silence_spin.value()
+        self.settings["low_vram_mode"] = self.low_vram_check.isChecked()
+        self.settings["always_on_top"] = self.always_on_top_check.isChecked()
+        self.settings["auto_start"] = self.auto_start_check.isChecked()
+        save_settings(self.settings)
+        self.accept()
+
+    def get_settings(self) -> Dict[str, Any]:
+        return self.settings
 
 
 class SignalBridge(QObject):
@@ -60,6 +324,7 @@ class Overlay(QWidget):
         self._on_start: Optional[Callable] = None
         self._on_stop: Optional[Callable] = None
         self._on_device_change: Optional[Callable[[int], None]] = None
+        self._on_settings_change: Optional[Callable[[Dict[str, Any]], None]] = None
 
         # State
         self._is_running = False
@@ -214,8 +479,13 @@ class Overlay(QWidget):
         self.stop_btn.clicked.connect(self._on_stop_clicked)
         self.stop_btn.setEnabled(False)
 
+        # Settings button
+        self.settings_btn = QPushButton("⚙ Settings")
+        self.settings_btn.clicked.connect(self._on_settings_clicked)
+
         control_layout.addWidget(self.start_btn)
         control_layout.addWidget(self.stop_btn)
+        control_layout.addWidget(self.settings_btn)
 
         main_layout.addWidget(control_group)
 
@@ -301,6 +571,15 @@ class Overlay(QWidget):
         if self._on_stop:
             self._on_stop()
 
+    def _on_settings_clicked(self):
+        """Handle settings button click."""
+        dialog = SettingsDialog(self, load_settings())
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            new_settings = dialog.get_settings()
+            self.append_debug("INFO", "Settings saved. Restart may be required for some changes.")
+            if self._on_settings_change:
+                self._on_settings_change(new_settings)
+
     def _set_user_text(self, text: str):
         """Set user text (thread-safe via signal)."""
         self.user_label.setText(text if text else "Say something in English...")
@@ -381,12 +660,14 @@ class Overlay(QWidget):
         self,
         on_start: Optional[Callable] = None,
         on_stop: Optional[Callable] = None,
-        on_device_change: Optional[Callable[[int], None]] = None
+        on_device_change: Optional[Callable[[int], None]] = None,
+        on_settings_change: Optional[Callable[[Dict[str, Any]], None]] = None
     ):
         """Set callback functions for UI events."""
         self._on_start = on_start
         self._on_stop = on_stop
         self._on_device_change = on_device_change
+        self._on_settings_change = on_settings_change
 
     def get_selected_device_index(self) -> Optional[int]:
         """Get currently selected device index."""

@@ -23,7 +23,7 @@ from typing import Optional
 from config import AppConfig, get_default_config, get_low_vram_config
 from audio_handler import AudioHandler, SpeechState, get_audio_devices, get_default_device_index
 from inference_engine import InferenceEngine
-from overlay import create_overlay, setup_debug_logging, PYQT_AVAILABLE
+from overlay import create_overlay, setup_debug_logging, load_settings, PYQT_AVAILABLE
 
 # Configure logging
 logging.basicConfig(
@@ -98,6 +98,20 @@ class SpanishGhostTextApp:
         if self._running and self.audio_handler:
             self.audio_handler.restart_with_device(device_index)
 
+    def _on_settings_change(self, new_settings: dict):
+        """Handle settings change from UI."""
+        logger.info("Settings changed")
+
+        # Update VAD threshold if changed
+        if self.audio_handler and "vad_threshold" in new_settings:
+            self.config.vad.threshold = new_settings["vad_threshold"]
+            logger.info(f"VAD threshold updated to {new_settings['vad_threshold']}")
+
+        # Update silence duration if changed
+        if "silence_duration_ms" in new_settings:
+            self.config.vad.min_silence_duration_ms = new_settings["silence_duration_ms"]
+            logger.info(f"Silence duration updated to {new_settings['silence_duration_ms']}ms")
+
     def _on_ui_start(self):
         """Handle start button from UI."""
         logger.info("Start requested from UI")
@@ -148,7 +162,8 @@ class SpanishGhostTextApp:
                 self.overlay.set_callbacks(
                     on_start=self._on_ui_start,
                     on_stop=self._on_ui_stop,
-                    on_device_change=self._on_device_change
+                    on_device_change=self._on_device_change,
+                    on_settings_change=self._on_settings_change
                 )
 
             # Load audio devices
@@ -361,17 +376,30 @@ def main():
     if args.debug:
         logging.getLogger().setLevel(logging.DEBUG)
 
-    # Get configuration
-    if args.low_vram:
+    # Load saved settings
+    saved_settings = load_settings()
+
+    # Get configuration based on settings or args
+    if args.low_vram or saved_settings.get("low_vram_mode", False):
         config = get_low_vram_config()
     else:
         config = get_default_config()
 
-    # Apply command line overrides
+    # Apply saved settings
+    if saved_settings.get("llm_model_path"):
+        config.llm.model_path = saved_settings["llm_model_path"]
+    if saved_settings.get("whisper_model"):
+        config.whisper.model_size = saved_settings["whisper_model"]
+    if saved_settings.get("vad_threshold"):
+        config.vad.threshold = saved_settings["vad_threshold"]
+    if saved_settings.get("silence_duration_ms"):
+        config.vad.min_silence_duration_ms = saved_settings["silence_duration_ms"]
+
+    # Command line overrides saved settings
     if args.model:
         config.llm.model_path = args.model
 
-    if args.whisper_model:
+    if args.whisper_model != "large-v3-turbo":  # Only override if explicitly set
         config.whisper.model_size = args.whisper_model
 
     # Create application
