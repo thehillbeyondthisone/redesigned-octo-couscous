@@ -21,9 +21,9 @@ from pathlib import Path
 from typing import Optional
 
 from config import AppConfig, get_default_config, get_low_vram_config
-from audio_handler import AudioHandler, SpeechState
+from audio_handler import AudioHandler, SpeechState, get_audio_devices, get_default_device_index
 from inference_engine import InferenceEngine
-from overlay import create_overlay, PYQT_AVAILABLE
+from overlay import create_overlay, setup_debug_logging, PYQT_AVAILABLE
 
 # Configure logging
 logging.basicConfig(
@@ -55,19 +55,21 @@ class SpanishGhostTextApp:
         self.audio_handler: Optional[AudioHandler] = None
         self.inference_engine: Optional[InferenceEngine] = None
         self.overlay = None
+        self._debug_handler = None
 
         # State tracking
         self._current_user_text = ""
         self._current_ghost_text = ""
         self._running = False
+        self._selected_device_index: Optional[int] = None
 
     def _on_state_change(self, state: SpeechState):
         """Handle audio state changes."""
         if self.overlay:
             status_map = {
-                SpeechState.SILENCE: "Listening...",
+                SpeechState.SILENCE: "● Listening...",
                 SpeechState.SPEECH_DETECTED: "🎤 Speaking...",
-                SpeechState.SPEECH_ENDING: "Processing..."
+                SpeechState.SPEECH_ENDING: "⏳ Processing..."
             }
             self.overlay.set_status(status_map.get(state, "Unknown"))
 
@@ -87,6 +89,42 @@ class SpanishGhostTextApp:
                 self.overlay.set_ghost_text(completion)
         logger.info(f"Completion: {completion}")
 
+    def _on_device_change(self, device_index: int):
+        """Handle audio device change from UI."""
+        self._selected_device_index = device_index
+        logger.info(f"Device changed to index: {device_index}")
+
+        # If running, restart with new device
+        if self._running and self.audio_handler:
+            self.audio_handler.restart_with_device(device_index)
+
+    def _on_ui_start(self):
+        """Handle start button from UI."""
+        logger.info("Start requested from UI")
+        self.start()
+
+    def _on_ui_stop(self):
+        """Handle stop button from UI."""
+        logger.info("Stop requested from UI")
+        self.stop()
+
+    def _load_audio_devices(self):
+        """Load available audio devices and update UI."""
+        devices = get_audio_devices()
+        logger.info(f"Found {len(devices)} audio input devices")
+
+        if self.overlay:
+            self.overlay.update_devices(devices)
+
+        # Set default device
+        if devices:
+            for dev in devices:
+                if dev.get('is_default'):
+                    self._selected_device_index = dev['index']
+                    break
+            if self._selected_device_index is None:
+                self._selected_device_index = devices[0]['index']
+
     def initialize(self) -> bool:
         """
         Initialize all components.
@@ -97,13 +135,33 @@ class SpanishGhostTextApp:
         logger.info("Initializing Spanish Ghost Text Aid...")
 
         try:
-            # Initialize audio handler
+            # Initialize overlay first (so we can log to it)
+            logger.info("Initializing overlay...")
+            self.overlay = create_overlay(self.config.ui, use_terminal=self.use_terminal)
+
+            # Set up debug logging to overlay
+            if self.overlay and hasattr(self.overlay, 'append_debug'):
+                self._debug_handler = setup_debug_logging(self.overlay)
+
+            # Set UI callbacks
+            if self.overlay and hasattr(self.overlay, 'set_callbacks'):
+                self.overlay.set_callbacks(
+                    on_start=self._on_ui_start,
+                    on_stop=self._on_ui_stop,
+                    on_device_change=self._on_device_change
+                )
+
+            # Load audio devices
+            self._load_audio_devices()
+
+            # Initialize audio handler (but don't start yet)
             logger.info("Initializing audio handler...")
             self.audio_handler = AudioHandler(
                 audio_config=self.config.audio,
                 vad_config=self.config.vad,
                 transcription_queue=self.transcription_queue,
-                on_state_change=self._on_state_change
+                on_state_change=self._on_state_change,
+                device_index=self._selected_device_index
             )
 
             # Initialize inference engine
@@ -123,37 +181,51 @@ class SpanishGhostTextApp:
             if not llm_ready:
                 logger.warning("LLM model not loaded - completion disabled")
 
-            # Initialize overlay
-            logger.info("Initializing overlay...")
-            self.overlay = create_overlay(self.config.ui, use_terminal=self.use_terminal)
-
-            logger.info("Initialization complete")
+            logger.info("Initialization complete - click Start to begin")
             return True
 
         except Exception as e:
             logger.error(f"Initialization failed: {e}")
+            import traceback
+            traceback.print_exc()
             return False
 
     def start(self):
         """Start all components."""
         if self._running:
+            logger.warning("Already running")
             return
 
         self._running = True
+        logger.info("Starting audio processing...")
+
+        # Get selected device from UI
+        if self.overlay and hasattr(self.overlay, 'get_selected_device_index'):
+            device_idx = self.overlay.get_selected_device_index()
+            if device_idx is not None:
+                self._selected_device_index = device_idx
 
         # Start inference engine (threads 2 & 3)
         if self.inference_engine:
             self.inference_engine.start()
 
-        # Start audio handler (thread 1)
+        # Start audio handler (thread 1) with selected device
         if self.audio_handler:
-            self.audio_handler.start()
+            self.audio_handler.start(self._selected_device_index)
+
+        if self.overlay:
+            self.overlay.set_status("● Listening...")
+            self.overlay.set_running_state(True)
 
         logger.info("Application started")
 
     def stop(self):
         """Stop all components."""
+        if not self._running:
+            return
+
         self._running = False
+        logger.info("Stopping audio processing...")
 
         # Stop audio handler
         if self.audio_handler:
@@ -162,6 +234,10 @@ class SpanishGhostTextApp:
         # Stop inference engine
         if self.inference_engine:
             self.inference_engine.stop()
+
+        if self.overlay:
+            self.overlay.set_status("⏸ Stopped")
+            self.overlay.set_running_state(False)
 
         logger.info("Application stopped")
 
@@ -179,12 +255,9 @@ class SpanishGhostTextApp:
         if not self.initialize():
             return 1
 
-        # Create GUI overlay
+        # Show GUI overlay (don't auto-start)
         if self.overlay and hasattr(self.overlay, 'show'):
             self.overlay.show()
-
-        # Start processing
-        self.start()
 
         # Handle Ctrl+C gracefully
         def signal_handler(sig, frame):
@@ -199,6 +272,11 @@ class SpanishGhostTextApp:
 
         # Cleanup
         self.stop()
+
+        # Remove debug handler
+        if self._debug_handler:
+            logging.getLogger().removeHandler(self._debug_handler)
+
         return ret
 
     def run_terminal(self):
@@ -207,7 +285,7 @@ class SpanishGhostTextApp:
         if not self.initialize():
             return 1
 
-        # Start processing
+        # Auto-start in terminal mode
         self.start()
 
         # Handle Ctrl+C
@@ -222,14 +300,9 @@ class SpanishGhostTextApp:
 
         try:
             # Simple terminal loop
+            import time
             while self._running:
-                import time
                 time.sleep(0.1)
-
-                # Update terminal display
-                if self.overlay:
-                    self.overlay.set_user_text(self._current_user_text)
-                    self.overlay.set_ghost_text(self._current_ghost_text)
 
         except KeyboardInterrupt:
             pass
@@ -271,6 +344,12 @@ def parse_args():
         action="store_true",
         help="Enable debug logging"
     )
+    parser.add_argument(
+        "--device",
+        type=int,
+        default=None,
+        help="Audio input device index"
+    )
     return parser.parse_args()
 
 
@@ -295,8 +374,12 @@ def main():
     if args.whisper_model:
         config.whisper.model_size = args.whisper_model
 
-    # Create and run application
+    # Create application
     app = SpanishGhostTextApp(config, use_terminal=args.terminal)
+
+    # Set device from command line if provided
+    if args.device is not None:
+        app._selected_device_index = args.device
 
     if args.terminal or not PYQT_AVAILABLE:
         return app.run_terminal()

@@ -33,6 +33,45 @@ from config import AudioConfig, VADConfig
 logger = logging.getLogger(__name__)
 
 
+def get_audio_devices() -> list:
+    """
+    Get list of available audio input devices.
+
+    Returns:
+        List of dicts with 'index', 'name', 'channels', 'sample_rate' keys
+    """
+    if sd is None:
+        return []
+
+    devices = []
+    try:
+        device_list = sd.query_devices()
+        for i, dev in enumerate(device_list):
+            # Only include input devices
+            if dev['max_input_channels'] > 0:
+                devices.append({
+                    'index': i,
+                    'name': dev['name'],
+                    'channels': dev['max_input_channels'],
+                    'sample_rate': int(dev['default_samplerate']),
+                    'is_default': i == sd.default.device[0]
+                })
+    except Exception as e:
+        logger.error(f"Failed to query audio devices: {e}")
+
+    return devices
+
+
+def get_default_device_index() -> int:
+    """Get the default input device index."""
+    if sd is None:
+        return -1
+    try:
+        return sd.default.device[0]
+    except Exception:
+        return -1
+
+
 class SpeechState(Enum):
     """Voice activity state machine states."""
     SILENCE = auto()
@@ -54,12 +93,14 @@ class AudioHandler:
         audio_config: AudioConfig,
         vad_config: VADConfig,
         transcription_queue: queue.Queue,
-        on_state_change: Optional[Callable[[SpeechState], None]] = None
+        on_state_change: Optional[Callable[[SpeechState], None]] = None,
+        device_index: Optional[int] = None
     ):
         self.audio_config = audio_config
         self.vad_config = vad_config
         self.transcription_queue = transcription_queue
         self.on_state_change = on_state_change
+        self.device_index = device_index  # None = use default device
 
         # Calculate chunk size in samples
         self.chunk_samples = int(
@@ -239,8 +280,12 @@ class AudioHandler:
                 with self._buffer_lock:
                     self.audio_buffer.extend(audio_chunk)
 
-    def start(self):
-        """Start audio capture."""
+    def start(self, device_index: Optional[int] = None):
+        """Start audio capture.
+
+        Args:
+            device_index: Optional device index override. If None, uses instance default.
+        """
         if self._running:
             logger.warning("Audio handler already running")
             return
@@ -248,10 +293,14 @@ class AudioHandler:
         if sd is None:
             raise RuntimeError("sounddevice not available")
 
+        # Use provided device or fall back to instance default
+        device = device_index if device_index is not None else self.device_index
+
         self._running = True
 
         # Open audio stream
         self._stream = sd.InputStream(
+            device=device,
             samplerate=self.audio_config.sample_rate,
             channels=self.audio_config.channels,
             dtype=np.float32,
@@ -259,7 +308,9 @@ class AudioHandler:
             callback=self._audio_callback
         )
         self._stream.start()
-        logger.info("Audio capture started")
+
+        device_name = "default" if device is None else f"device {device}"
+        logger.info(f"Audio capture started on {device_name}")
 
     def stop(self):
         """Stop audio capture."""
@@ -283,3 +334,30 @@ class AudioHandler:
     def is_running(self) -> bool:
         """Check if audio capture is running."""
         return self._running
+
+    def set_device(self, device_index: Optional[int]):
+        """
+        Set the audio device to use.
+
+        Args:
+            device_index: Device index, or None for default
+        """
+        self.device_index = device_index
+        logger.info(f"Audio device set to: {device_index if device_index is not None else 'default'}")
+
+    def restart_with_device(self, device_index: Optional[int] = None):
+        """
+        Restart audio capture with a different device.
+
+        Args:
+            device_index: New device index to use
+        """
+        was_running = self._running
+        if was_running:
+            self.stop()
+
+        if device_index is not None:
+            self.device_index = device_index
+
+        if was_running:
+            self.start()
