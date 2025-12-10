@@ -131,6 +131,7 @@ class AudioHandler:
 
         # Initialize VAD
         self.vad_model = None
+        self._vad_window_size = 512  # Silero VAD requires 512 samples at 16kHz
         self._init_vad()
 
     def _init_vad(self):
@@ -148,6 +149,8 @@ class AudioHandler:
                 onnx=False
             )
             self.vad_model.eval()
+            # Reset model state
+            self.vad_model.reset_states()
             logger.info("Silero VAD initialized successfully")
         except Exception as e:
             logger.error(f"Failed to initialize Silero VAD: {e}")
@@ -156,6 +159,9 @@ class AudioHandler:
     def _detect_speech(self, audio_chunk: np.ndarray) -> bool:
         """
         Run VAD on audio chunk to detect speech.
+
+        Silero VAD requires specific window sizes (512 samples at 16kHz).
+        We process the chunk in windows and return True if any window has speech.
 
         Args:
             audio_chunk: Audio samples as float32 array
@@ -169,19 +175,45 @@ class AudioHandler:
             return energy > 0.01
 
         try:
-            # Convert to tensor
-            audio_tensor = torch.from_numpy(audio_chunk).float()
+            # Process audio in 512-sample windows (required by Silero VAD at 16kHz)
+            window_size = self._vad_window_size
+            num_windows = len(audio_chunk) // window_size
 
-            # Run VAD
-            speech_prob = self.vad_model(
-                audio_tensor,
-                self.audio_config.sample_rate
-            ).item()
+            if num_windows == 0:
+                # Chunk too small, use energy-based detection
+                energy = np.sqrt(np.mean(audio_chunk ** 2))
+                return energy > 0.01
 
-            return speech_prob > self.vad_config.threshold
+            speech_detected = False
+            max_prob = 0.0
+
+            for i in range(num_windows):
+                start = i * window_size
+                end = start + window_size
+                window = audio_chunk[start:end]
+
+                # Convert to tensor
+                audio_tensor = torch.from_numpy(window).float()
+
+                # Run VAD on this window
+                speech_prob = self.vad_model(
+                    audio_tensor,
+                    self.audio_config.sample_rate
+                ).item()
+
+                max_prob = max(max_prob, speech_prob)
+
+                if speech_prob > self.vad_config.threshold:
+                    speech_detected = True
+                    # Don't break early - process all windows to keep model state consistent
+
+            return speech_detected
+
         except Exception as e:
             logger.error(f"VAD error: {e}")
-            return False
+            # Fallback to energy-based detection
+            energy = np.sqrt(np.mean(audio_chunk ** 2))
+            return energy > 0.01
 
     def _update_state(self, is_speech: bool):
         """
