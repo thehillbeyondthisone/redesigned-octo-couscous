@@ -160,8 +160,8 @@ class AudioHandler:
         """
         Run VAD on audio chunk to detect speech.
 
-        Silero VAD requires specific window sizes (512 samples at 16kHz).
-        We process the chunk in windows and return True if any window has speech.
+        With 32ms chunks at 16kHz, we get exactly 512 samples which is
+        what Silero VAD expects. If chunk size differs, we process in windows.
 
         Args:
             audio_chunk: Audio samples as float32 array
@@ -175,37 +175,41 @@ class AudioHandler:
             return energy > 0.01
 
         try:
-            # Process audio in 512-sample windows (required by Silero VAD at 16kHz)
-            window_size = self._vad_window_size
-            num_windows = len(audio_chunk) // window_size
+            chunk_len = len(audio_chunk)
+            window_size = self._vad_window_size  # 512
+
+            # If chunk is exactly the right size, process directly
+            if chunk_len == window_size:
+                audio_tensor = torch.from_numpy(audio_chunk).float()
+                speech_prob = self.vad_model(
+                    audio_tensor,
+                    self.audio_config.sample_rate
+                ).item()
+                return speech_prob > self.vad_config.threshold
+
+            # Otherwise, process in windows (handles variable chunk sizes)
+            num_windows = chunk_len // window_size
 
             if num_windows == 0:
-                # Chunk too small, use energy-based detection
+                # Chunk too small for VAD, use energy-based detection
                 energy = np.sqrt(np.mean(audio_chunk ** 2))
                 return energy > 0.01
 
             speech_detected = False
-            max_prob = 0.0
 
             for i in range(num_windows):
                 start = i * window_size
                 end = start + window_size
                 window = audio_chunk[start:end]
 
-                # Convert to tensor
                 audio_tensor = torch.from_numpy(window).float()
-
-                # Run VAD on this window
                 speech_prob = self.vad_model(
                     audio_tensor,
                     self.audio_config.sample_rate
                 ).item()
 
-                max_prob = max(max_prob, speech_prob)
-
                 if speech_prob > self.vad_config.threshold:
                     speech_detected = True
-                    # Don't break early - process all windows to keep model state consistent
 
             return speech_detected
 

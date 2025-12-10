@@ -16,7 +16,7 @@ from pathlib import Path
 class AudioConfig:
     """Audio recording configuration."""
     sample_rate: int = 16000  # Whisper expects 16kHz
-    chunk_duration_ms: int = 512  # Audio chunk size in milliseconds
+    chunk_duration_ms: int = 32  # 32ms = 512 samples at 16kHz (Silero VAD requirement)
     channels: int = 1  # Mono audio
     silence_threshold_ms: int = 300  # Pause duration to trigger utterance complete
     max_buffer_duration_s: float = 30.0  # Maximum audio buffer duration
