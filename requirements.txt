@@ -1,0 +1,26 @@
+# Real-Time Spanish Autocomplete "Ghost Text" Aid
+# Dependencies for RTX 4070 (12GB VRAM) target hardware
+
+# Transcription - faster-whisper with CTranslate2 backend
+faster-whisper==1.0.3
+
+# LLM Inference - llama-cpp-python with CUDA support
+# Install with: CMAKE_ARGS="-DGGML_CUDA=on" pip install llama-cpp-python
+llama-cpp-python>=0.2.0
+
+# PyTorch for Silero VAD (CUDA 12.1)
+--extra-index-url https://download.pytorch.org/whl/cu121
+torch>=2.0.0
+
+# Audio input handling
+pyaudio>=0.2.14
+numpy>=1.24.0
+
+# Voice Activity Detection
+silero-vad>=5.0
+
+# UI Overlay
+PyQt6>=6.5.0
+
+# Additional utilities
+sounddevice>=0.4.6
